@@ -1,0 +1,28 @@
+node_modules
+dist
+.env
+.env.local
+.DS_Store
+.env*
+node_modules/
+dist/
+/brand-backup-*/
+/src-backup-*/
+/src backup/
+/install_nexora_saas_terminal.py
+/upgrade_nexora_cloud.py
+*.log
+.wrangler/
+.vercel/
+
+# MAEKRAVON local-only files
+*.before-*
+/brand-backup-*/
+/src-backup-*/
+/src backup/
+/supabase/.temp/
+/install_nexora_saas_terminal.py
+/upgrade_nexora_cloud.py
+.wrangler/
+.vercel/
+!/.env.example
