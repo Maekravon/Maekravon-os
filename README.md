@@ -1,78 +1,80 @@
-# NEXORA OS 2.0
+# MAEKRAVON OS
+### CONTROL EVERYTHING.
 
-NEXORA OS is a business operating system prototype built with React, TypeScript, and Vite. It preserves the dark navy / cyan / purple NEXORA identity.
+MAEKRAVON OS is a cloud-connected business workspace built with React, TypeScript, Vite, and Supabase.
+
+## Features
+
+- Supabase authentication and workspace access
+- Cloud-synchronized CRM leads and activity history
+- Follow-up tasks and appointments
+- Workspace preferences and automation settings
+- Team invitations and role management
+- Workspace notifications
+- Responsive business dashboard
 
 ## Requirements
 
-- Chromebook with Linux development environment enabled, or another computer with Node.js 20.19+ or 22.12+
-- Internet connection for initial package installation
+- Node.js 20.19+ or 22.12+
+- npm
+- A configured Supabase project
 
-## Start on a Chromebook
+## Local development
 
-1. Download and extract `nexora-os-2.zip`.
-2. Open the Chromebook **Terminal** app (Linux).
-3. Move into the extracted project folder. Example:
+Install dependencies:
 
-   `cd ~/Downloads/nexora-os-2`
+    npm install
 
-   If you extracted it somewhere else, use that folder's path.
+Create your local environment file:
 
-4. Check Node.js:
+    cp .env.example .env.local
 
-   `node -v`
+Configure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env.local.
 
-   If Node.js is not installed, install a current Node.js LTS version in the Linux environment before continuing. The official Node.js site is https://nodejs.org/.
+Start the application:
 
-5. Install project packages:
+    npm run dev
 
-   `npm install`
+## Production build
 
-6. Start the development server:
+    npm run build
 
-   `npm run dev`
+The production frontend is generated in dist/.
 
-7. The terminal will show a local address, usually `http://localhost:5173`. Open that address in Chrome.
+## Supabase
 
-8. Keep the terminal running while you use the app. Press `Ctrl + C` in the terminal to stop it.
+Project reference: fkhyovnpgyshscbbgige
 
-## What works in this first build
+Database migrations:
 
-- Responsive NEXORA OS shell and navigation
-- Command Center dashboard
-- Lead search
-- Add new leads
-- Change lead status
-- Live dashboard totals
-- Export local workspace backup
-- Browser local storage persistence
+    supabase/migrations/
 
-## Important: demo mode
+Team management function:
 
-This first build stores demo leads in the current browser on the current device. It does **not** yet have production login, cloud synchronization, multi-user access, or a real AI service. Do not enter sensitive customer information into the demo.
+    supabase/functions/manage-members/
 
-The Supabase client placeholder is in `src/lib.ts`. The next implementation stage will add real authentication, tenant-isolated database tables, and Row Level Security before any customer data is stored in the cloud.
+Check migration status:
 
-## Connect Supabase later
+    npx supabase migration list --remote
 
-1. Create a project at https://supabase.com/.
-2. Copy `.env.example` to a new file named `.env`.
-3. Add the Supabase Project URL and anon/publishable key to `.env`.
-4. Restart the Vite server after changing environment variables.
+Deploy the team management function:
 
-Do not put a Supabase service-role key or any private API key in a `VITE_` variable. Browser-exposed variables are public.
+    npx supabase functions deploy manage-members --use-api
 
-## Build check
+## Security
 
-Run:
+- Never commit .env.local.
+- Never expose a Supabase service-role key in frontend code.
+- Protect database access with correctly configured Row Level Security.
+- Store private credentials in secure environment variables.
 
-`npm run build`
+## Production launch checklist
 
-A successful build creates the deployable static site in `dist/`.
+- Configure permanent HTTPS hosting.
+- Configure Supabase authentication redirect URLs.
+- Configure verified custom SMTP for invitation emails.
+- Test account creation, login, invitations, and mobile access.
 
-## Project structure
+---
 
-- `src/App.tsx` — application shell and working lead module
-- `src/styles.css` — NEXORA visual system
-- `src/lib.ts` — Supabase client configuration
-- `src/main.tsx` — application entry point
-- `.env.example` — safe placeholder for public Supabase configuration
+MAEKRAVON OS | CONTROL EVERYTHING.
