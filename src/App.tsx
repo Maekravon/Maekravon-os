@@ -13,7 +13,7 @@ import { loadCloudLeads, importLocalLeads, syncCloudLeads, deleteCloudLead } fro
 import { loadCloudWorkspace, syncCloudWorkspace } from "./cloudWorkspace";
 import { loadWorkspaceNotifications, markWorkspaceNotificationRead, inviteWorkspaceMember, changeWorkspaceMemberRole, removeWorkspaceMember, revokeWorkspaceInvitation, type WorkspaceNotification, type WorkspaceInvitation } from "./cloudSaas";
 import { createFinanceTransaction, deleteFinanceTransaction, loadFinanceTransactions, type FinanceTransaction, type FinanceTransactionInput } from "./finance";
-import { askMaekravonAI } from "./ai";
+import { askMaekravonAI, type AssistantMode } from "./ai";
 
 type LeadStatus = "New" | "Contacted" | "Qualified" | "Won" | "Lost";
 type LeadSource = "Website" | "Referral" | "Social Media" | "Phone" | "Walk-in" | "Other";
@@ -540,7 +540,7 @@ export default function App({ workspaceId }: { workspaceId: string }) {
     return `Business snapshot: ${leads.length} leads, ${customerCount} won customers, ${money(pipeline)} open pipeline, ${openTasks.length} open follow-ups, and ${upcoming.length} upcoming appointments. ${financeLine}`;
   }
 
-  async function answerAssistant(question: string) {
+  async function answerAssistant(question: string, mode: AssistantMode = "everyday") {
     if (assistantBusy) return;
     const userMessage: AssistantMessage = { id: `MSG-${Date.now()}-u`, role: "user", text: question, createdAt: new Date().toISOString() };
     setAssistantMessages(current => [...current, userMessage]);
@@ -553,7 +553,7 @@ export default function App({ workspaceId }: { workspaceId: string }) {
         followUps: followUps.map(({ title, dueDate, priority, done }) => ({ title, dueDate, priority, done })),
         appointments: appointments.map(({ title, date, time, done }) => ({ title, date, time, done })),
         financeTransactions,
-      });
+      }, mode);
       setAssistantMessages(current => [...current, { id: `MSG-${Date.now()}-a`, role: "assistant", text: answer, createdAt: new Date().toISOString() }]);
     } catch {
       const fallback = localAssistantAnswer(question);
@@ -880,15 +880,17 @@ function AppointmentsModule({ appointments, leads, onAdd, onToggle, alertsEnable
   </section></div>;
 }
 
-function AssistantModule({ messages, onAsk, busy }: { messages: AssistantMessage[]; onAsk: (question: string) => Promise<void>; busy: boolean }) {
+function AssistantModule({ messages, onAsk, busy }: { messages: AssistantMessage[]; onAsk: (question: string, mode?: AssistantMode) => Promise<void>; busy: boolean }) {
   const [question,setQuestion]=useState("");
-  async function submit(e:FormEvent){e.preventDefault();if(!question.trim()||busy)return;const next=question.trim();setQuestion("");await onAsk(next);}
+  const [mode,setMode]=useState<AssistantMode>("everyday");
+  async function submit(e:FormEvent){e.preventDefault();if(!question.trim()||busy)return;const next=question.trim();setQuestion("");await onAsk(next,mode);}
   const prompts=["Give me my business health check","Where am I leaking money?","What should I focus on this week?","How do I grow revenue from this pipeline?"];
-  return <section className="panel module-panel assistant-panel"><ModuleHeading kicker="AI BUSINESS COPILOT" title="MAEKRAVON AI" description="Ask for finance analysis, growth strategy, CRM priorities, risk detection, and an operator-style next-action plan." right={<span className="local-chip">AI + WORKSPACE DATA</span>}/>
-    <div className="assistant-disclaimer">MAEKRAVON uses the data saved in this workspace. CRM deal values are kept separate from recorded financial transactions. Financial, tax, legal, lending, and investment decisions should be verified with the appropriate professional.</div>
-    <div className="assistant-chat">{messages.map(message=><div className={`chat-message ${message.role}`} key={message.id}><div className="chat-avatar">{message.role==="assistant"?"MK":"YOU"}</div><div><span>{message.role==="assistant"?"MAEKRAVON":"You"}</span><p>{message.text}</p></div></div>)}{busy&&<div className="chat-message"><div className="chat-avatar">MK</div><div><span>MAEKRAVON</span><p>Analyzing your workspace...</p></div></div>}</div>
-    <div className="prompt-chips">{prompts.map(p=><button key={p} disabled={busy} onClick={()=>void onAsk(p)}>{p}</button>)}</div>
-    <form className="assistant-input" onSubmit={submit}><input value={question} disabled={busy} onChange={e=>setQuestion(e.target.value)} placeholder="Ask about cash flow, expenses, leads, growth, risks, or next actions..."/><button className="primary-btn" disabled={busy||!question.trim()} type="submit"><ArrowUpRight size={15}/> {busy?"Analyzing...":"Ask"}</button></form>
+  return <section className="panel module-panel assistant-panel"><ModuleHeading kicker="AI BUSINESS COPILOT" title="MAEKRAVON AI" description="Ask for finance analysis, growth strategy, CRM priorities, risk detection, and an operator-style next-action plan." right={<span className="local-chip">{mode==="deep"?"DEEP · TERRA":"EVERYDAY · LUNA"}</span>}/>
+    <div className="assistant-disclaimer">MAEKRAVON uses the data saved in this workspace. Everyday mode uses the low-cost Luna model and a compact workspace summary. Deep Analysis uses Terra only when you deliberately select it for harder planning. CRM deal values are kept separate from recorded financial transactions.</div>
+    <div className="assistant-mode-row"><button type="button" className={mode==="everyday"?"assistant-mode active":"assistant-mode"} disabled={busy} onClick={()=>setMode("everyday")}><span>Everyday</span><small>Luna · lowest cost</small></button><button type="button" className={mode==="deep"?"assistant-mode deep active":"assistant-mode deep"} disabled={busy} onClick={()=>setMode("deep")}><span>Deep Analysis</span><small>Terra · use when needed</small></button></div>
+    <div className="assistant-chat">{messages.map(message=><div className={`chat-message ${message.role}`} key={message.id}><div className="chat-avatar">{message.role==="assistant"?"MK":"YOU"}</div><div><span>{message.role==="assistant"?"MAEKRAVON":"You"}</span><p>{message.text}</p></div></div>)}{busy&&<div className="chat-message"><div className="chat-avatar">MK</div><div><span>MAEKRAVON</span><p>{mode==="deep"?"Running a deeper business analysis...":"Analyzing your workspace..."}</p></div></div>}</div>
+    <div className="prompt-chips">{prompts.map(p=><button key={p} disabled={busy} onClick={()=>void onAsk(p,mode)}>{p}</button>)}</div>
+    <form className="assistant-input" onSubmit={submit}><input value={question} disabled={busy} onChange={e=>setQuestion(e.target.value)} placeholder={mode==="deep"?"Ask for a deeper forecast, strategy, or financial analysis...":"Ask about cash flow, expenses, leads, growth, risks, or next actions..."}/><button className="primary-btn" disabled={busy||!question.trim()} type="submit"><ArrowUpRight size={15}/> {busy?"Analyzing...":mode==="deep"?"Deep Analyze":"Ask"}</button></form>
   </section>;
 }
 

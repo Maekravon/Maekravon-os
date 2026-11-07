@@ -22,15 +22,18 @@ export type BusinessAssistantContext = {
   financeTransactions: FinanceTransaction[];
 };
 
+export type AssistantMode = "everyday" | "deep";
+
 export async function askMaekravonAI(
   workspaceId: string,
   question: string,
   context: BusinessAssistantContext,
+  mode: AssistantMode = "everyday",
 ): Promise<string> {
   if (!supabase) throw new Error("Supabase is not configured.");
 
   const { data, error } = await supabase.functions.invoke("maekravon-ai", {
-    body: { workspaceId, question, context },
+    body: { workspaceId, question, context, mode },
   });
 
   if (error) throw error;

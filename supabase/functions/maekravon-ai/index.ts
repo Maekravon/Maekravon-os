@@ -24,7 +24,6 @@ Deno.serve(async (request) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") || "";
     const openaiApiKey = Deno.env.get("OPENAI_API_KEY") || "";
-    const model = Deno.env.get("OPENAI_MODEL") || "gpt-6.1-terra";
 
     if (!supabaseUrl || !supabaseAnonKey) return json(500, { error: "Supabase Edge Function environment is incomplete." });
     if (!openaiApiKey) return json(503, { error: "MAEKRAVON AI is not connected yet. Add the OPENAI_API_KEY Edge Function secret." });
@@ -33,6 +32,10 @@ Deno.serve(async (request) => {
     const workspaceId = String(body?.workspaceId || "");
     const question = String(body?.question || "").trim();
     const context = body?.context || {};
+    const mode = body?.mode === "deep" ? "deep" : "everyday";
+    const model = mode === "deep"
+      ? (Deno.env.get("OPENAI_DEEP_MODEL") || "gpt-6.1-terra")
+      : (Deno.env.get("OPENAI_MODEL") || "gpt-6-luna");
 
     if (!workspaceId || !question) return json(400, { error: "workspaceId and question are required." });
     if (question.length > 4000) return json(400, { error: "Question is too long." });
@@ -52,13 +55,14 @@ Deno.serve(async (request) => {
     if (membershipError) throw membershipError;
     if (!membership) return json(403, { error: "You do not have access to this workspace." });
 
+    const deep = mode === "deep";
     const compactContext = {
       businessName: context.businessName,
       monthlyGoal: context.monthlyGoal,
-      leads: Array.isArray(context.leads) ? context.leads.slice(0, 150) : [],
-      followUps: Array.isArray(context.followUps) ? context.followUps.slice(0, 100) : [],
-      appointments: Array.isArray(context.appointments) ? context.appointments.slice(0, 100) : [],
-      financeTransactions: Array.isArray(context.financeTransactions) ? context.financeTransactions.slice(0, 300) : [],
+      leads: Array.isArray(context.leads) ? context.leads.slice(0, deep ? 150 : 60) : [],
+      followUps: Array.isArray(context.followUps) ? context.followUps.slice(0, deep ? 100 : 40) : [],
+      appointments: Array.isArray(context.appointments) ? context.appointments.slice(0, deep ? 100 : 30) : [],
+      financeTransactions: Array.isArray(context.financeTransactions) ? context.financeTransactions.slice(0, deep ? 300 : 100) : [],
     };
 
     const system = `You are MAEKRAVON AI, an operator-focused business finance and growth copilot for small and growing businesses.
@@ -67,7 +71,8 @@ Your job is to help the owner understand cash flow, revenue, expenses, pipeline,
 Prioritize concrete next actions. Show arithmetic when it materially helps. Separate observed facts from estimates and recommendations.
 Never claim that CRM deal values are cash in the bank. Never invent bank balances, tax obligations, invoices, debts, or transactions that are not in the data.
 For legal, tax, investment, lending, or regulated financial decisions, provide general planning guidance and state when a licensed professional should verify the decision.
-Keep most answers under 500 words unless the user explicitly asks for depth.`;
+In everyday mode, be concise and decision-oriented. In deep mode, provide a more thorough analysis with assumptions, tradeoffs, and a prioritized action plan.
+Keep everyday answers under 350 words and deep answers under 900 words unless the user explicitly asks for more.`;
 
     const openai = new OpenAI({ apiKey: openaiApiKey });
     const response = await openai.responses.create({
@@ -76,12 +81,13 @@ Keep most answers under 500 words unless the user explicitly asks for depth.`;
       input: [
         {
           role: "user",
-          content: `WORKSPACE DATA\n${JSON.stringify(compactContext)}\n\nUSER QUESTION\n${question}`,
+          content: `MODE\n${mode}\n\nWORKSPACE DATA\n${JSON.stringify(compactContext)}\n\nUSER QUESTION\n${question}`,
         },
       ],
+      max_output_tokens: deep ? 1400 : 650,
     });
 
-    return json(200, { answer: response.output_text, model });
+    return json(200, { answer: response.output_text, model, mode });
   } catch (error) {
     console.error(error);
     return json(500, { error: error instanceof Error ? error.message : "MAEKRAVON AI request failed." });
