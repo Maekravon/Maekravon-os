@@ -1,0 +1,40 @@
+import { supabase } from "./lib";
+import type { FinanceTransaction } from "./finance";
+
+type LeadContext = {
+  name: string;
+  company: string;
+  status: string;
+  source: string;
+  value: number;
+  createdAt: string;
+};
+
+type FollowUpContext = { title: string; dueDate: string; priority: string; done: boolean };
+type AppointmentContext = { title: string; date: string; time: string; done: boolean };
+
+export type BusinessAssistantContext = {
+  businessName: string;
+  monthlyGoal: number;
+  leads: LeadContext[];
+  followUps: FollowUpContext[];
+  appointments: AppointmentContext[];
+  financeTransactions: FinanceTransaction[];
+};
+
+export async function askMaekravonAI(
+  workspaceId: string,
+  question: string,
+  context: BusinessAssistantContext,
+): Promise<string> {
+  if (!supabase) throw new Error("Supabase is not configured.");
+
+  const { data, error } = await supabase.functions.invoke("maekravon-ai", {
+    body: { workspaceId, question, context },
+  });
+
+  if (error) throw error;
+  if (data?.error) throw new Error(String(data.error));
+  if (!data?.answer) throw new Error("MAEKRAVON AI returned an empty response.");
+  return String(data.answer);
+}

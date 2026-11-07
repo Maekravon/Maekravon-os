@@ -208,3 +208,34 @@ export async function importLocalLeads(
     activitiesImported: result.activitiesSynced
   };
 }
+
+
+export async function deleteCloudLead(
+  workspaceId: string,
+  leadId: string
+): Promise<void> {
+  const client = getClient();
+
+  const query = client
+    .from("leads")
+    .delete()
+    .eq("workspace_id", workspaceId);
+
+  const { data, error } = leadId.startsWith("CLOUD-")
+    ? await query
+        .eq("id", leadId.slice("CLOUD-".length))
+        .select("id")
+    : await query
+        .eq("legacy_id", leadId)
+        .select("id");
+
+  if (error) throw error;
+
+  if (!data || data.length === 0) {
+    throw new Error(
+      "Lead could not be deleted. Only workspace owners or admins can delete leads."
+    );
+  }
+
+
+}

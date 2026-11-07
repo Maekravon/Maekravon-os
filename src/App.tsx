@@ -6,12 +6,14 @@ import {
   FileText, Globe, LayoutDashboard, Mail, MapPin, Menu, MessageSquareText,
   MoreHorizontal, Phone, Plus, Search, Settings, Sparkles, Target,
   TrendingUp, Users, Workflow, X, Zap, Building2, Save, Pencil, UserRound,
-  SlidersHorizontal
+  SlidersHorizontal, DollarSign, ReceiptText, Trash2, WalletCards
 } from "lucide-react";
 import { hasSupabaseConfig } from "./lib";
-import { loadCloudLeads, importLocalLeads, syncCloudLeads } from "./cloudLeads";
+import { loadCloudLeads, importLocalLeads, syncCloudLeads, deleteCloudLead } from "./cloudLeads";
 import { loadCloudWorkspace, syncCloudWorkspace } from "./cloudWorkspace";
 import { loadWorkspaceNotifications, markWorkspaceNotificationRead, inviteWorkspaceMember, changeWorkspaceMemberRole, removeWorkspaceMember, revokeWorkspaceInvitation, type WorkspaceNotification, type WorkspaceInvitation } from "./cloudSaas";
+import { createFinanceTransaction, deleteFinanceTransaction, loadFinanceTransactions, type FinanceTransaction, type FinanceTransactionInput } from "./finance";
+import { askMaekravonAI } from "./ai";
 
 type LeadStatus = "New" | "Contacted" | "Qualified" | "Won" | "Lost";
 type LeadSource = "Website" | "Referral" | "Social Media" | "Phone" | "Walk-in" | "Other";
@@ -129,7 +131,7 @@ export default function App({ workspaceId }: { workspaceId: string }) {
   const [followUps, setFollowUps] = useState<FollowUpTask[]>(() => loadStored("nexora-followups-v1", []));
   const [appointments, setAppointments] = useState<Appointment[]>(() => loadStored("nexora-appointments-v1", []));
   const [automationRules, setAutomationRules] = useState<AutomationSettings>(() => loadStored("nexora-automations-v1", defaultAutomationSettings));
-  const [teamMembers, setTeamMembers] = useState<TeamMember[]>(() => loadStored("nexora-team-v1", [{ id: "NX-OWNER", name: "Workspace Owner", email: "owner@nexora.local", role: "Administrator", status: "Active" }]));
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>(() => loadStored("nexora-team-v1", [{ id: "NX-OWNER", name: "Workspace Owner", email: "owner@maekravon.local", role: "Administrator", status: "Active" }]));
   const [workspaceSettings, setWorkspaceSettings] = useState<WorkspaceSettings>(() => loadStored("nexora-settings-v1", defaultWorkspaceSettings));
   const [workspaceCloudStatus, setWorkspaceCloudStatus] = useState("loading");
   const [workspaceCloudMessage, setWorkspaceCloudMessage] = useState("");
@@ -140,7 +142,11 @@ export default function App({ workspaceId }: { workspaceId: string }) {
   const workspaceSyncBusy = useRef(false);
   const latestWorkspaceDataRef = useRef({ followUps, appointments, automationRules, workspaceSettings });
   latestWorkspaceDataRef.current = { followUps, appointments, automationRules, workspaceSettings };
-  const [assistantMessages, setAssistantMessages] = useState<AssistantMessage[]>([{ id: "welcome", role: "assistant", text: "I'm your MAEKRAVON workspace guide. I can summarize your local leads, pipeline, follow-ups, and appointments. This demo assistant uses your saved workspace data and is not connected to a live AI service yet.", createdAt: new Date().toISOString() }]);
+  const [assistantMessages, setAssistantMessages] = useState<AssistantMessage[]>([{ id: "welcome", role: "assistant", text: "I'm MAEKRAVON AI, your business finance and growth copilot. I can analyze the CRM, follow-ups, appointments, and financial activity saved in this workspace. Ask what is happening, what is at risk, or what you should do next.", createdAt: new Date().toISOString() }]);
+  const [assistantBusy, setAssistantBusy] = useState(false);
+  const [financeTransactions, setFinanceTransactions] = useState<FinanceTransaction[]>([]);
+  const [financeStatus, setFinanceStatus] = useState<"loading" | "connected" | "setup_required" | "error">("loading");
+  const [financeMessage, setFinanceMessage] = useState("");
 
   useEffect(() => {
     localStorage.setItem("nexora-os-leads-v3", JSON.stringify(leads));
@@ -152,6 +158,28 @@ export default function App({ workspaceId }: { workspaceId: string }) {
   useEffect(() => { localStorage.setItem("nexora-automations-v1", JSON.stringify(automationRules)); }, [automationRules]);
   useEffect(() => { localStorage.setItem("nexora-team-v1", JSON.stringify(teamMembers)); }, [teamMembers]);
   useEffect(() => { localStorage.setItem("nexora-settings-v1", JSON.stringify(workspaceSettings)); }, [workspaceSettings]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadFinance() {
+      setFinanceStatus("loading");
+      try {
+        const rows = await loadFinanceTransactions(workspaceId);
+        if (cancelled) return;
+        setFinanceTransactions(rows);
+        setFinanceStatus("connected");
+        setFinanceMessage(rows.length ? `${rows.length} financial records loaded.` : "Finance ledger connected. Add income or expenses to begin tracking cash flow.");
+      } catch (error) {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : "Finance data could not be loaded.";
+        const lower = message.toLowerCase();
+        setFinanceStatus(lower.includes("finance_transactions") || lower.includes("relation") || lower.includes("schema cache") ? "setup_required" : "error");
+        setFinanceMessage(message);
+      }
+    }
+    void loadFinance();
+    return () => { cancelled = true; };
+  }, [workspaceId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -376,6 +404,13 @@ export default function App({ workspaceId }: { workspaceId: string }) {
   const won = leads.filter(lead => lead.status === "Won").reduce((sum, lead) => sum + lead.value, 0);
   const needsAttention = leads.filter(lead => lead.status === "New").length;
   const customerCount = leads.filter(lead => lead.status === "Won").length;
+  const currentMonth = today().slice(0, 7);
+  const monthFinance = financeTransactions.filter(item => item.date.startsWith(currentMonth));
+  const monthIncome = monthFinance.filter(item => item.kind === "income").reduce((sum, item) => sum + item.amount, 0);
+  const monthExpenses = monthFinance.filter(item => item.kind === "expense").reduce((sum, item) => sum + item.amount, 0);
+  const monthProfit = monthIncome - monthExpenses;
+  const allTimeNetCashFlow = financeTransactions.reduce((sum, item) => sum + (item.kind === "income" ? item.amount : -item.amount), 0);
+  const recurringMonthlyExpenses = financeTransactions.filter(item => item.kind === "expense" && item.recurring).reduce((sum, item) => sum + item.amount, 0);
 
   function notify(message: string) {
     setToast(message);
@@ -426,6 +461,41 @@ export default function App({ workspaceId }: { workspaceId: string }) {
     notify("Contact profile saved");
   }
 
+  async function deleteLead(lead: Lead) {
+    if (!window.confirm(`Permanently delete ${lead.name}? Related cloud activities, follow-ups, and appointments may also be removed. This cannot be undone.`)) return;
+    try {
+      await deleteCloudLead(workspaceId, lead.id);
+      setLeads(current => current.filter(item => item.id !== lead.id));
+      setFollowUps(current => current.filter(item => item.leadId !== lead.id));
+      setAppointments(current => current.filter(item => item.leadId !== lead.id));
+      setSelectedId(null);
+      notify("Lead permanently deleted");
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Lead could not be deleted.");
+    }
+  }
+
+  async function handleAddFinanceTransaction(input: FinanceTransactionInput) {
+    try {
+      const created = await createFinanceTransaction(workspaceId, input);
+      setFinanceTransactions(current => [created, ...current]);
+      setFinanceStatus("connected");
+      setFinanceMessage("Financial activity saved to the cloud ledger.");
+      notify(input.kind === "income" ? "Income recorded" : "Expense recorded");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Financial activity could not be saved.";
+      setFinanceMessage(message);
+      throw new Error(message);
+    }
+  }
+
+  async function handleDeleteFinanceTransaction(id: string) {
+    if (!window.confirm("Delete this financial record? This cannot be undone.")) return;
+    await deleteFinanceTransaction(workspaceId, id);
+    setFinanceTransactions(current => current.filter(item => item.id !== id));
+    notify("Financial record deleted");
+  }
+
   function addNote(event: FormEvent) {
     event.preventDefault();
     if (!selectedLead || !noteDraft.trim()) return;
@@ -437,7 +507,7 @@ export default function App({ workspaceId }: { workspaceId: string }) {
   }
 
   function exportBackup() {
-    const blob = new Blob([JSON.stringify({ app: "MAEKRAVON OS", schemaVersion: 4, exportedAt: new Date().toISOString(), leads, followUps, appointments, automationRules, teamMembers, workspaceSettings }, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ app: "MAEKRAVON OS", schemaVersion: 5, exportedAt: new Date().toISOString(), leads, followUps, appointments, automationRules, teamMembers, workspaceSettings, financeTransactions }, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url; anchor.download = "maekravon-os-backup.json"; anchor.click();
@@ -455,17 +525,42 @@ export default function App({ workspaceId }: { workspaceId: string }) {
     notify("Appointment saved to this workspace");
   }
   function toggleAppointment(id: string) { setAppointments(current => current.map(item => item.id === id ? { ...item, done: !item.done } : item)); }
-  function answerAssistant(question: string) {
+  function localAssistantAnswer(question: string) {
     const q = question.toLowerCase();
     const openTasks = followUps.filter(task => !task.done);
     const upcoming = appointments.filter(item => !item.done).sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
-    let response = `You have ${leads.length} leads, ${openPipelineLeads.length} open opportunities worth ${money(pipeline)}, and ${money(won)} in won deals.`;
-    if (q.includes("follow") || q.includes("task")) response = `There are ${openTasks.length} open follow-ups. ${openTasks.length ? `Your next item is “${openTasks[0].title}” due ${openTasks[0].dueDate}.` : "Your follow-up list is clear."}`;
-    else if (q.includes("appointment") || q.includes("meeting")) response = `You have ${upcoming.length} upcoming appointments. ${upcoming.length ? `The next is “${upcoming[0].title}” on ${upcoming[0].date} at ${upcoming[0].time}.` : "No upcoming appointments are saved."}`;
-    else if (q.includes("lead") || q.includes("customer")) response = `Your workspace has ${leads.length} leads and ${customerCount} won customers. ${needsAttention} new lead${needsAttention === 1 ? " needs" : "s need"} a first response.`;
-    else if (q.includes("revenue") || q.includes("pipeline") || q.includes("deal")) response = `Your open pipeline is ${money(pipeline)}. Won deal value is ${money(won)}. The weighted forecast is ${money(weightedForecast)}, using starter stage percentages, not a guaranteed prediction.`;
-    else response = `Here's a useful snapshot: ${leads.length} total leads, ${needsAttention} new leads to contact, ${openTasks.length} open follow-ups, and ${upcoming.length} upcoming appointments. Try asking about leads, revenue, follow-ups, or appointments.`;
-    setAssistantMessages(current => [...current, { id: `MSG-${Date.now()}-u`, role: "user", text: question, createdAt: new Date().toISOString() }, { id: `MSG-${Date.now()}-a`, role: "assistant", text: response, createdAt: new Date().toISOString() }]);
+    const financeLine = financeTransactions.length
+      ? `This month you recorded ${money(monthIncome)} of income and ${money(monthExpenses)} of expenses, for ${monthProfit >= 0 ? "positive" : "negative"} net cash flow of ${money(Math.abs(monthProfit))}.`
+      : "No financial transactions are recorded yet, so I cannot infer cash flow or profit from CRM deal values.";
+    if (q.includes("expense") || q.includes("profit") || q.includes("cash") || q.includes("finance") || q.includes("money")) return `${financeLine} ${recurringMonthlyExpenses ? `Recurring expenses currently total ${money(recurringMonthlyExpenses)} across the records marked recurring.` : "No recurring expenses are marked yet."}`;
+    if (q.includes("follow") || q.includes("task")) return `There are ${openTasks.length} open follow-ups. ${openTasks.length ? `Your next item is “${openTasks[0].title}” due ${openTasks[0].dueDate}.` : "Your follow-up list is clear."}`;
+    if (q.includes("appointment") || q.includes("meeting")) return `You have ${upcoming.length} upcoming appointments. ${upcoming.length ? `The next is “${upcoming[0].title}” on ${upcoming[0].date} at ${upcoming[0].time}.` : "No upcoming appointments are saved."}`;
+    if (q.includes("lead") || q.includes("customer")) return `Your workspace has ${leads.length} leads and ${customerCount} won customers. ${needsAttention} new lead${needsAttention === 1 ? " needs" : "s need"} a first response. Your open pipeline is ${money(pipeline)}.`;
+    if (q.includes("revenue") || q.includes("pipeline") || q.includes("deal") || q.includes("grow")) return `Your open pipeline is ${money(pipeline)}, with a weighted planning forecast of ${money(weightedForecast)}. ${needsAttention ? `Start by responding to ${needsAttention} untouched new lead${needsAttention === 1 ? "" : "s"}.` : "Your new-lead queue is clear."} ${financeLine}`;
+    return `Business snapshot: ${leads.length} leads, ${customerCount} won customers, ${money(pipeline)} open pipeline, ${openTasks.length} open follow-ups, and ${upcoming.length} upcoming appointments. ${financeLine}`;
+  }
+
+  async function answerAssistant(question: string) {
+    if (assistantBusy) return;
+    const userMessage: AssistantMessage = { id: `MSG-${Date.now()}-u`, role: "user", text: question, createdAt: new Date().toISOString() };
+    setAssistantMessages(current => [...current, userMessage]);
+    setAssistantBusy(true);
+    try {
+      const answer = await askMaekravonAI(workspaceId, question, {
+        businessName: workspaceSettings.businessName,
+        monthlyGoal: Number(workspaceSettings.monthlyGoal) || 0,
+        leads: leads.map(({ name, company, status, source, value, createdAt }) => ({ name, company, status, source, value, createdAt })),
+        followUps: followUps.map(({ title, dueDate, priority, done }) => ({ title, dueDate, priority, done })),
+        appointments: appointments.map(({ title, date, time, done }) => ({ title, date, time, done })),
+        financeTransactions,
+      });
+      setAssistantMessages(current => [...current, { id: `MSG-${Date.now()}-a`, role: "assistant", text: answer, createdAt: new Date().toISOString() }]);
+    } catch {
+      const fallback = localAssistantAnswer(question);
+      setAssistantMessages(current => [...current, { id: `MSG-${Date.now()}-a`, role: "assistant", text: `${fallback}\n\nCloud AI is not connected yet, so this answer was generated from MAEKRAVON's built-in business analysis rules.`, createdAt: new Date().toISOString() }]);
+    } finally {
+      setAssistantBusy(false);
+    }
   }
   async function refreshTeamData() {
     const snapshot = await loadCloudWorkspace(workspaceId);
@@ -548,7 +643,7 @@ export default function App({ workspaceId }: { workspaceId: string }) {
           </div>)}
         </nav>
         <div className="sidebar-bottom">
-          <div className="upgrade-card"><div className="upgrade-icon"><Sparkles size={16}/></div><strong>Unlock more with MAEKRAVON</strong><p>Your business command center is just getting started.</p><button onClick={() => notify("Plans and billing are coming in a later build.")}>Explore plans <ArrowUpRight size={14}/></button></div>
+          <div className="upgrade-card"><div className="upgrade-icon"><Sparkles size={16}/></div><strong>MAEKRAVON AI brief</strong><p>Turn CRM activity and financial records into prioritized business actions.</p><button onClick={() => setActive("AI Assistant")}>Open AI copilot <ArrowUpRight size={14}/></button></div>
           <button className="nav-item" onClick={() => notify("Help center content is coming soon.")}><CircleHelp size={17}/><span>Help center</span></button>
           <div className="profile"><div className="avatar">MK</div><div><strong>{workspaceSettings.ownerName || "Workspace Owner"}</strong><small>Administrator</small></div><MoreHorizontal size={18} className="muted"/></div>
         </div>
@@ -557,7 +652,7 @@ export default function App({ workspaceId }: { workspaceId: string }) {
       <main className="main-area">
         <header className="topbar">
           <div className="topbar-left"><button className="icon-btn mobile-menu" onClick={() => setMobileNav(true)} aria-label="Open menu"><Menu size={20}/></button><div className="breadcrumb">Workspace <span>/</span> <strong>{active}</strong></div></div>
-          <div className="topbar-actions"><div className="system-status"><span/> All systems operational</div><div style={{ position: "relative" }}>
+          <div className="topbar-actions"><div className="system-status"><span/> {cloudStatus === "connected" && workspaceCloudStatus === "connected" ? "Cloud workspace connected" : cloudStatus === "error" || workspaceCloudStatus === "error" ? "Connection needs attention" : "Syncing workspace"}</div><div style={{ position: "relative" }}>
             <button className="icon-btn" aria-label="Notifications" onClick={() => void toggleNotifications()} style={{ position: "relative" }}>
               <Bell size={18}/>{unreadNotificationCount > 0 && <span style={{ position: "absolute", top: 1, right: 1, minWidth: 16, height: 16, borderRadius: 9, background: "#E45B72", color: "white", fontSize: 10, display: "grid", placeItems: "center", padding: "0 3px" }}>{unreadNotificationCount > 9 ? "9+" : unreadNotificationCount}</span>}
             </button>
@@ -612,10 +707,10 @@ export default function App({ workspaceId }: { workspaceId: string }) {
 
           {isFollowUps ? <FollowUpsModule tasks={followUps} leads={leads} onAdd={addFollowUp} onToggle={toggleFollowUp} onOpenLead={openLead}/> :
            isAppointments ? <AppointmentsModule appointments={appointments} leads={leads} onAdd={addAppointment} onToggle={toggleAppointment} alertsEnabled={automationRules.appointmentAlerts}/> :
-           isAssistant ? <AssistantModule messages={assistantMessages} onAsk={answerAssistant}/> :
+           isAssistant ? <AssistantModule messages={assistantMessages} onAsk={answerAssistant} busy={assistantBusy}/> :
            isAutomations ? <AutomationsModule rules={automationRules} onChange={setAutomationRules} followUpCount={followUps.filter(task => !task.done).length}/> :
            isRevenue ? <RevenueModule leads={leads} pipeline={pipeline} won={won} forecast={weightedForecast} goal={Number(workspaceSettings.monthlyGoal) || 0}/> :
-           isFinance ? <FinanceModule leads={leads} won={won}/> :
+           isFinance ? <FinanceModule transactions={financeTransactions} status={financeStatus} message={financeMessage} onAdd={handleAddFinanceTransaction} onDelete={handleDeleteFinanceTransaction}/> :
            isTeam ? <TeamModule members={teamMembers} invitations={pendingInvitations} onInvite={handleInviteMember} onRoleChange={handleMemberRoleChange} onRemove={handleRemoveMember} onRevoke={handleRevokeInvitation}/> :
            isSettings ? <SettingsModule settings={workspaceSettings} onSave={setWorkspaceSettings} onExport={exportBackup}/> :
            (!isDashboard && !isLeads && !isPipeline && !isCustomers) ? <section className="coming-panel"><div className="coming-orb"><Zap size={26}/></div><div className="eyebrow">MODULE FRAMEWORK</div><h2>{active} is in the build queue.</h2><p>This section is part of the MAEKRAVON OS architecture. We're building each module on the same shared foundation, one working feature at a time.</p><button className="secondary-btn" onClick={() => setActive("Command Center")}>Return to Command Center</button></section> : <>
@@ -625,14 +720,14 @@ export default function App({ workspaceId }: { workspaceId: string }) {
               <Metric icon={<Activity size={18}/>} label="Weighted forecast" value={money(weightedForecast)} trend="Planning estimate by stage" tone="purple"/>
               <Metric icon={<CheckCircle2 size={18}/>} label="Won revenue" value={money(won)} trend="Value marked as won" tone="green"/>
             </section> : <section className="metric-grid">
-              <Metric icon={<Users size={18}/>} label="Total leads" value={String(leads.length)} trend="Every open opportunity" tone="cyan"/>
+              <Metric icon={<Users size={18}/>} label="Total leads" value={String(leads.length)} trend="Every opportunity in CRM" tone="cyan"/>
               <Metric icon={<Target size={18}/>} label="Needs attention" value={String(needsAttention)} trend="New leads to contact" tone="purple"/>
               <Metric icon={<TrendingUp size={18}/>} label="Open pipeline" value={money(pipeline)} trend="Potential deal value" tone="blue"/>
-              <Metric icon={<CheckCircle2 size={18}/>} label={isCustomers ? "Customers" : "Won revenue"} value={isCustomers ? String(customerCount) : money(won)} trend={isCustomers ? "Leads marked as won" : "Value marked as won"} tone="green"/>
+              <Metric icon={<DollarSign size={18}/>} label={isDashboard && financeTransactions.length ? "Month net cash flow" : isCustomers ? "Customers" : "Won deal value"} value={isDashboard && financeTransactions.length ? money(monthProfit) : isCustomers ? String(customerCount) : money(won)} trend={isDashboard && financeTransactions.length ? `${money(monthIncome)} in · ${money(monthExpenses)} out` : isCustomers ? "Leads marked as won" : "CRM value marked as won"} tone="green"/>
             </section>}
 
             {isPipeline ? <PipelineBoard leads={leads} onMove={updateStatus} onOpen={openLead}/> : <>
-            {isDashboard && <section className="insight-strip"><div className="insight-icon"><Sparkles size={18}/></div><div className="insight-copy"><strong>MAEKRAVON insight</strong><span>{needsAttention ? `You have ${needsAttention} new lead${needsAttention === 1 ? "" : "s"} waiting for a first response.` : "Your new-lead queue is clear. Keep the momentum going."}</span></div><button onClick={() => setActive("AI Assistant")}>Explore AI assistant <ArrowUpRight size={14}/></button></section>}
+            {isDashboard && <section className="insight-strip"><div className="insight-icon"><Sparkles size={18}/></div><div className="insight-copy"><strong>MAEKRAVON daily brief</strong><span>{financeTransactions.length ? `${monthProfit >= 0 ? "Positive" : "Negative"} month cash flow: ${money(monthProfit)}. ${needsAttention ? `${needsAttention} new lead${needsAttention === 1 ? "" : "s"} still need a first response.` : "Your new-lead queue is clear."}` : needsAttention ? `You have ${needsAttention} new lead${needsAttention === 1 ? "" : "s"} waiting for a first response. Add financial activity in Finance to unlock cash-flow analysis.` : "Your new-lead queue is clear. Add financial activity in Finance to unlock cash-flow analysis."}</span></div><button onClick={() => setActive("AI Assistant")}>Ask MAEKRAVON <ArrowUpRight size={14}/></button></section>}
 
             <section className="panel leads-panel">
               <div className="panel-heading"><div><div className="panel-kicker">{isCustomers ? "CUSTOMER RELATIONSHIPS" : "CUSTOMER ACQUISITION"}</div><h2>{isDashboard ? "Recent leads" : isCustomers ? "Customer records" : "All leads"}</h2><p>{isCustomers ? "Every customer marked Won appears here." : "Open a contact to view the profile, add notes, and track activity."}</p></div>{isLeads && <span className="record-count">{leads.length} records</span>}</div>
@@ -657,7 +752,7 @@ export default function App({ workspaceId }: { workspaceId: string }) {
 
             {isDashboard && <div className="bottom-grid">
               <section className="panel mini-panel"><div className="panel-heading"><div><div className="panel-kicker">WORKFLOW HEALTH</div><h2>Automation activity</h2></div><Workflow size={19} className="muted"/></div><div className="empty-mini"><div className="mini-icon"><Workflow size={20}/></div><strong>Your workflows start here</strong><span>Connect repetitive tasks and let MAEKRAVON handle the handoffs.</span><button className="text-btn" onClick={() => setActive("Automations")}>Explore automations <ArrowUpRight size={14}/></button></div></section>
-              <section className="panel mini-panel"><div className="panel-heading"><div><div className="panel-kicker">BUSINESS INTELLIGENCE</div><h2>Revenue snapshot</h2></div><Activity size={19} className="muted"/></div><div className="revenue-total">{money(won)}<span>Won deal value</span></div><div className="revenue-note"><span className="positive-dot"/> Based on leads marked Won in this workspace</div></section>
+              <section className="panel mini-panel"><div className="panel-heading"><div><div className="panel-kicker">FINANCIAL PULSE</div><h2>{financeTransactions.length ? "Month cash flow" : "Finance setup"}</h2></div><WalletCards size={19} className="muted"/></div>{financeTransactions.length ? <><div className="revenue-total">{money(monthProfit)}<span>Income minus recorded expenses</span></div><div className="revenue-note"><span className={monthProfit >= 0 ? "positive-dot" : "negative-dot"}/> {money(monthIncome)} income · {money(monthExpenses)} expenses</div></> : <div className="empty-mini"><div className="mini-icon"><ReceiptText size={20}/></div><strong>Turn CRM into a business cockpit</strong><span>Add income and expenses so MAEKRAVON can analyze real cash flow instead of guessing from deal values.</span><button className="text-btn" onClick={() => setActive("Finance")}>Open Finance <ArrowUpRight size={14}/></button></div>}</section>
             </div>}
             </>}
           </>}
@@ -686,12 +781,12 @@ export default function App({ workspaceId }: { workspaceId: string }) {
                 <div className="form-row"><label><span><Mail size={12}/> Email</span><input type="email" value={detailForm.email} onChange={event => setDetailForm({ ...detailForm, email: event.target.value })} placeholder="No email saved"/></label><label><span><Phone size={12}/> Phone</span><input type="tel" value={detailForm.phone} onChange={event => setDetailForm({ ...detailForm, phone: event.target.value })} placeholder="No phone saved"/></label></div>
                 <div className="form-row"><label>Service<input value={detailForm.service} onChange={event => setDetailForm({ ...detailForm, service: event.target.value })} placeholder="Service requested"/></label><label>Estimated value ($)<input type="number" min="0" value={detailForm.value} onChange={event => setDetailForm({ ...detailForm, value: event.target.value })}/></label></div>
                 <label>Lead source<select value={detailForm.source} onChange={event => setDetailForm({ ...detailForm, source: event.target.value as LeadSource })}>{sourceOptions.map(source => <option key={source}>{source}</option>)}</select></label>
-                <div className="detail-save-row"><span>Added {new Date(selectedLead.createdAt + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span><button className="primary-btn" type="submit"><Save size={15}/> Save profile</button></div>
+                <div className="detail-save-row"><span>Added {new Date(selectedLead.createdAt + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span><div className="detail-actions"><button className="danger-btn" type="button" onClick={() => void deleteLead(selectedLead)}><Trash2 size={15}/> Delete lead</button><button className="primary-btn" type="submit"><Save size={15}/> Save profile</button></div></div>
               </form>
               <form className="detail-card note-card" onSubmit={addNote}>
                 <div className="detail-card-heading"><div><div className="panel-kicker">PRIVATE WORKSPACE NOTES</div><h3>Add a note</h3></div><FileText size={16}/></div>
                 <textarea value={noteDraft} onChange={event => setNoteDraft(event.target.value)} placeholder="Write a call summary, customer request, or next step..." rows={3}/>
-                <div className="detail-save-row"><span>Notes are saved in this browser.</span><button className="secondary-btn" type="submit" disabled={!noteDraft.trim()}><Plus size={15}/> Add note</button></div>
+                <div className="detail-save-row"><span>Notes sync with this cloud workspace.</span><button className="secondary-btn" type="submit" disabled={!noteDraft.trim()}><Plus size={15}/> Add note</button></div>
               </form>
             </div>
             <aside className="activity-card">
@@ -785,14 +880,15 @@ function AppointmentsModule({ appointments, leads, onAdd, onToggle, alertsEnable
   </section></div>;
 }
 
-function AssistantModule({ messages, onAsk }: { messages: AssistantMessage[]; onAsk: (question: string) => void }) {
+function AssistantModule({ messages, onAsk, busy }: { messages: AssistantMessage[]; onAsk: (question: string) => Promise<void>; busy: boolean }) {
   const [question,setQuestion]=useState("");
-  function submit(e:FormEvent){e.preventDefault();if(!question.trim())return;onAsk(question.trim());setQuestion("");}
-  return <section className="panel module-panel assistant-panel"><ModuleHeading kicker="WORKSPACE GUIDE" title="MAEKRAVON Assistant" description="Ask questions about your saved leads, pipeline, follow-ups, and appointments." right={<span className="local-chip">LOCAL DEMO ASSISTANT</span>}/>
-    <div className="assistant-disclaimer">This version uses built-in workspace summaries and simple rules. It is not a live generative AI connection and does not send your data to an AI provider.</div>
-    <div className="assistant-chat">{messages.map(message=><div className={`chat-message ${message.role}`} key={message.id}><div className="chat-avatar">{message.role==="assistant"?"MK":"YOU"}</div><div><span>{message.role==="assistant"?"MAEKRAVON":"You"}</span><p>{message.text}</p></div></div>)}</div>
-    <div className="prompt-chips">{["Who needs follow-up?","Summarize my pipeline","What appointments are coming up?"].map(p=><button key={p} onClick={()=>onAsk(p)}>{p}</button>)}</div>
-    <form className="assistant-input" onSubmit={submit}><input value={question} onChange={e=>setQuestion(e.target.value)} placeholder="Ask about your business workspace..."/><button className="primary-btn" type="submit"><ArrowUpRight size={15}/> Ask</button></form>
+  async function submit(e:FormEvent){e.preventDefault();if(!question.trim()||busy)return;const next=question.trim();setQuestion("");await onAsk(next);}
+  const prompts=["Give me my business health check","Where am I leaking money?","What should I focus on this week?","How do I grow revenue from this pipeline?"];
+  return <section className="panel module-panel assistant-panel"><ModuleHeading kicker="AI BUSINESS COPILOT" title="MAEKRAVON AI" description="Ask for finance analysis, growth strategy, CRM priorities, risk detection, and an operator-style next-action plan." right={<span className="local-chip">AI + WORKSPACE DATA</span>}/>
+    <div className="assistant-disclaimer">MAEKRAVON uses the data saved in this workspace. CRM deal values are kept separate from recorded financial transactions. Financial, tax, legal, lending, and investment decisions should be verified with the appropriate professional.</div>
+    <div className="assistant-chat">{messages.map(message=><div className={`chat-message ${message.role}`} key={message.id}><div className="chat-avatar">{message.role==="assistant"?"MK":"YOU"}</div><div><span>{message.role==="assistant"?"MAEKRAVON":"You"}</span><p>{message.text}</p></div></div>)}{busy&&<div className="chat-message"><div className="chat-avatar">MK</div><div><span>MAEKRAVON</span><p>Analyzing your workspace...</p></div></div>}</div>
+    <div className="prompt-chips">{prompts.map(p=><button key={p} disabled={busy} onClick={()=>void onAsk(p)}>{p}</button>)}</div>
+    <form className="assistant-input" onSubmit={submit}><input value={question} disabled={busy} onChange={e=>setQuestion(e.target.value)} placeholder="Ask about cash flow, expenses, leads, growth, risks, or next actions..."/><button className="primary-btn" disabled={busy||!question.trim()} type="submit"><ArrowUpRight size={15}/> {busy?"Analyzing...":"Ask"}</button></form>
   </section>;
 }
 
@@ -802,10 +898,10 @@ function AutomationsModule({ rules, onChange, followUpCount }: { rules: Automati
     {key:"qualifiedTask",title:"Qualified lead proposal task",description:"When a lead moves to Qualified, create a task to prepare and send a proposal.",tag:"SALES PROCESS"},
     {key:"appointmentAlerts",title:"Appointment reminders",description:"Highlight the appointment schedule and show a reminder notice when this rule is enabled. No email or text is sent.",tag:"SCHEDULING"},
   ];
-  return <section className="panel module-panel"><ModuleHeading kicker="WORKFLOW BUILDER" title="Automations" description="Manage workspace automation preferences. Rule execution remains browser-based in this release." right={<span className="module-count">{Object.values(rules).filter(Boolean).length} ACTIVE</span>}/>
-    <div className="automation-summary"><div><strong>{followUpCount}</strong><span>Open follow-up tasks</span></div><div><strong>{Object.values(rules).filter(Boolean).length}/3</strong><span>Rules enabled</span></div><div><strong>LOCAL</strong><span>Runs in this browser</span></div></div>
+  return <section className="panel module-panel"><ModuleHeading kicker="WORKFLOW BUILDER" title="Automations" description="Manage server-backed workspace automations for lead follow-up and operational reminders." right={<span className="module-count">{Object.values(rules).filter(Boolean).length} ACTIVE</span>}/>
+    <div className="automation-summary"><div><strong>{followUpCount}</strong><span>Open follow-up tasks</span></div><div><strong>{Object.values(rules).filter(Boolean).length}/3</strong><span>Rules enabled</span></div><div><strong>CLOUD</strong><span>Supabase-backed rules</span></div></div>
     <div className="automation-list">{items.map(item=><div className="automation-row" key={item.key}><div className="automation-symbol"><Workflow size={18}/></div><div className="automation-main"><span>{item.tag}</span><strong>{item.title}</strong><p>{item.description}</p></div><label className="switch-control"><input type="checkbox" checked={rules[item.key]} onChange={e=>onChange({...rules,[item.key]:e.target.checked})}/><span/></label></div>)}</div>
-    <div className="module-notice">These preferences sync to Supabase. The current rule actions still run only while this browser app is open; they do not send messages or access external calendars.</div>
+    <div className="module-notice">New-lead and qualified-lead follow-ups are created by Supabase database triggers. Appointment reminders are generated server-side as in-app notifications. Email, SMS, and external calendar actions are not connected yet.</div>
   </section>;
 }
 
@@ -822,12 +918,55 @@ function RevenueModule({ leads, pipeline, won, forecast, goal }: { leads: Lead[]
     </section></div>;
 }
 
-function FinanceModule({ leads, won }: { leads: Lead[]; won: number }) {
-  const open=leads.filter(l=>!["Won","Lost"].includes(l.status)).reduce((sum,l)=>sum+l.value,0);
-  return <section className="panel module-panel"><ModuleHeading kicker="FINANCIAL OVERVIEW" title="Deal value snapshot" description="A basic view of sales values recorded in your CRM. This is not accounting software or a connected bank feed."/>
-    <div className="module-stats"><div><span>Won deal value</span><strong>{money(won)}</strong></div><div><span>Open opportunity value</span><strong>{money(open)}</strong></div><div><span>Lead records</span><strong>{leads.length}</strong></div></div>
-    <div className="module-notice">No bank accounts, expenses, taxes, invoices, or payments are connected. Use your accounting records for official financial reporting.</div>
-  </section>;
+function FinanceModule({ transactions, status, message, onAdd, onDelete }: {
+  transactions: FinanceTransaction[];
+  status: "loading" | "connected" | "setup_required" | "error";
+  message: string;
+  onAdd: (input: FinanceTransactionInput) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
+}) {
+  const [kind,setKind]=useState<"income"|"expense">("income");
+  const [amount,setAmount]=useState("");
+  const [category,setCategory]=useState("Sales");
+  const [description,setDescription]=useState("");
+  const [date,setDate]=useState(today());
+  const [recurring,setRecurring]=useState(false);
+  const [busy,setBusy]=useState(false);
+  const [feedback,setFeedback]=useState("");
+  const month=today().slice(0,7);
+  const monthRows=transactions.filter(item=>item.date.startsWith(month));
+  const income=monthRows.filter(item=>item.kind==="income").reduce((sum,item)=>sum+item.amount,0);
+  const expenses=monthRows.filter(item=>item.kind==="expense").reduce((sum,item)=>sum+item.amount,0);
+  const net=income-expenses;
+  const allNet=transactions.reduce((sum,item)=>sum+(item.kind==="income"?item.amount:-item.amount),0);
+  const recurringExpenseTotal=transactions.filter(item=>item.kind==="expense"&&item.recurring).reduce((sum,item)=>sum+item.amount,0);
+  const expenseCategories=[...new Set(monthRows.filter(item=>item.kind==="expense").map(item=>item.category))].map(name=>({name,total:monthRows.filter(item=>item.kind==="expense"&&item.category===name).reduce((sum,item)=>sum+item.amount,0)})).sort((a,b)=>b.total-a.total);
+  const maxCategory=Math.max(1,...expenseCategories.map(item=>item.total));
+  async function submit(event:FormEvent){event.preventDefault();const value=Number(amount);if(!value||value<=0)return;setBusy(true);setFeedback("");try{await onAdd({kind,amount:value,category,description,date,recurring});setAmount("");setDescription("");setRecurring(false);setFeedback("Saved to the MAEKRAVON finance ledger.");}catch(error){setFeedback(error instanceof Error?error.message:"Could not save this record.");}finally{setBusy(false);}}
+  if(status==="loading") return <section className="panel module-panel"><ModuleHeading kicker="BUSINESS FINANCE" title="Finance command center" description="Loading your workspace ledger..."/></section>;
+  return <div className="module-stack">
+    <section className="module-stats finance-kpis"><div><span>This month income</span><strong>{money(income)}</strong></div><div><span>This month expenses</span><strong>{money(expenses)}</strong></div><div><span>Net cash flow</span><strong className={net<0?"negative-value":""}>{money(net)}</strong></div><div><span>Recorded net movement</span><strong className={allNet<0?"negative-value":""}>{money(allNet)}</strong></div></section>
+    <section className="panel module-panel"><ModuleHeading kicker="MONEY IN · MONEY OUT" title="Finance command center" description="Record business income and expenses so MAEKRAVON can analyze real financial activity separately from CRM deal values." right={<span className="module-count">{transactions.length} RECORDS</span>}/>
+      {status==="setup_required"&&<div className="launch-alert"><strong>Finance database upgrade required</strong><span>Apply the included MAEKRAVON Launch Patch migration to Supabase, then refresh this page.</span></div>}
+      {status==="error"&&<div className="launch-alert"><strong>Finance connection issue</strong><span>{message}</span></div>}
+      <form className="finance-entry-form" onSubmit={submit}>
+        <label>Type<select value={kind} onChange={e=>{const next=e.target.value as "income"|"expense";setKind(next);if(next==="income"&&category==="Operating expense")setCategory("Sales");}}><option value="income">Income</option><option value="expense">Expense</option></select></label>
+        <label>Amount<input type="number" min="0.01" step="0.01" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0.00" required/></label>
+        <label>Category<input value={category} onChange={e=>setCategory(e.target.value)} placeholder={kind==="income"?"Sales":"Payroll, software, rent..."}/></label>
+        <label>Date<input type="date" value={date} onChange={e=>setDate(e.target.value)} required/></label>
+        <label className="finance-description">Description<input value={description} onChange={e=>setDescription(e.target.value)} placeholder="What was this for?"/></label>
+        <label className="finance-recurring"><input type="checkbox" checked={recurring} onChange={e=>setRecurring(e.target.checked)}/> Recurring monthly</label>
+        <button className="primary-btn" type="submit" disabled={busy||status==="setup_required"}>{busy?"Saving...":kind==="income"?"Record income":"Record expense"}</button>
+      </form>
+      {feedback&&<div className="module-notice">{feedback}</div>}
+      <div className="finance-grid">
+        <div className="chart-card"><h3>Expense pressure</h3>{expenseCategories.length?expenseCategories.slice(0,6).map(item=><div className="bar-row" key={item.name}><div><span>{item.name}</span><strong>{money(item.total)}</strong></div><div className="bar-track"><i style={{width:`${item.total/maxCategory*100}%`}}/></div></div>):<div className="module-empty">No expenses recorded this month.</div>}<div className="goal-progress"><div><span>Recurring expenses marked</span><strong>{money(recurringExpenseTotal)}</strong></div></div></div>
+        <div className="finance-health-card"><div className="panel-kicker">MAEKRAVON FINANCIAL PULSE</div><strong className={net>=0?"health-positive":"health-negative"}>{net>=0?"Positive cash flow":"Negative cash flow"}</strong><p>{transactions.length?`${money(income)} came in and ${money(expenses)} went out this month. ${net>=0?"Protect the margin and decide what to reinvest.":"Review the largest expense categories and near-term sales opportunities."}`:"Add your first income or expense record to activate financial analysis."}</p><div className="finance-mini"><span>CRM won deal value</span><b>Kept separate from cash</b></div><div className="finance-mini"><span>Bank connectivity</span><b>Connector-ready, not linked</b></div></div>
+      </div>
+      <div className="finance-ledger"><div className="detail-card-heading"><div><div className="panel-kicker">RECENT ACTIVITY</div><h3>Transaction ledger</h3></div><ReceiptText size={17}/></div>{transactions.length?transactions.slice(0,60).map(item=><div className="finance-row" key={item.id}><div className={`finance-kind ${item.kind}`}><DollarSign size={15}/></div><div className="finance-row-main"><strong>{item.description||item.category}</strong><small>{item.category} · {new Date(item.date+"T12:00:00").toLocaleDateString()} · {item.source}{item.recurring?" · recurring":""}</small></div><b className={item.kind==="expense"?"expense-amount":"income-amount"}>{item.kind==="expense"?"−":"+"}{money(item.amount)}</b><button className="icon-btn danger-icon" onClick={()=>void onDelete(item.id)} aria-label="Delete financial record"><Trash2 size={15}/></button></div>):<div className="module-empty">No financial records yet. Record an income payment or business expense above.</div>}</div>
+      <div className="module-notice">This ledger is for business planning and AI analysis. Until you connect a bank or accounting provider, it only knows the transactions you record here and should not be treated as a reconciled bank balance or official accounting statement.</div>
+    </section>
+  </div>;
 }
 
 function TeamModule({ members, invitations, onInvite, onRoleChange, onRemove, onRevoke }: {
@@ -900,6 +1039,6 @@ function SettingsModule({ settings, onSave, onExport }: { settings: WorkspaceSet
   function submit(e:FormEvent){e.preventDefault();onSave(draft);}
   return <section className="panel module-panel"><ModuleHeading kicker="WORKSPACE PREFERENCES" title="Settings" description="Set the workspace identity and a simple monthly sales goal. Settings sync to your cloud workspace."/>
     <form className="settings-form" onSubmit={submit}><label>Business name<input value={draft.businessName} onChange={e=>setDraft({...draft,businessName:e.target.value})} placeholder="Your business name"/></label><label>Workspace owner<input value={draft.ownerName} onChange={e=>setDraft({...draft,ownerName:e.target.value})} placeholder="Owner name"/></label><label>Monthly sales goal ($)<input type="number" min="0" value={draft.monthlyGoal} onChange={e=>setDraft({...draft,monthlyGoal:e.target.value})}/></label><label>Currency<select value={draft.currency} onChange={e=>setDraft({...draft,currency:e.target.value})}><option value="USD">USD · US Dollar</option></select></label><label>Timezone<select value={draft.timezone} onChange={e=>setDraft({...draft,timezone:e.target.value})}><option value="America/Chicago">Central Time</option><option value="America/New_York">Eastern Time</option><option value="America/Denver">Mountain Time</option><option value="America/Los_Angeles">Pacific Time</option></select></label><div className="settings-actions"><button type="submit" className="primary-btn"><Save size={15}/> Save settings</button><button type="button" className="secondary-btn" onClick={onExport}><Download size={15}/> Export full backup</button></div></form>
-    <div className="module-notice">Business preferences are saved in Supabase and can load on other signed-in devices. Automation actions still run only while this browser app is open.</div>
+    <div className="module-notice">Business preferences are saved in Supabase and can load on other signed-in devices. Core follow-up and reminder automations are server-backed.</div>
   </section>;
 }
