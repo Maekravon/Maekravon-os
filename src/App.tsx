@@ -555,9 +555,15 @@ export default function App({ workspaceId }: { workspaceId: string }) {
         financeTransactions,
       }, mode);
       setAssistantMessages(current => [...current, { id: `MSG-${Date.now()}-a`, role: "assistant", text: answer, createdAt: new Date().toISOString() }]);
-    } catch {
+    } catch (error) {
       const fallback = localAssistantAnswer(question);
-      setAssistantMessages(current => [...current, { id: `MSG-${Date.now()}-a`, role: "assistant", text: `${fallback}\n\nCloud AI is not connected yet, so this answer was generated from MAEKRAVON's built-in business analysis rules.`, createdAt: new Date().toISOString() }]);
+      const cloudError = error instanceof Error ? error.message : "Unknown cloud AI error.";
+      setAssistantMessages(current => [...current, {
+        id: `MSG-${Date.now()}-a`,
+        role: "assistant",
+        text: `${fallback}\n\nCloud AI error: ${cloudError}\n\nThis answer was generated from MAEKRAVON's built-in business analysis rules.`,
+        createdAt: new Date().toISOString()
+      }]);
     } finally {
       setAssistantBusy(false);
     }

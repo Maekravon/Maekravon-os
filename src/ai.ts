@@ -36,7 +36,27 @@ export async function askMaekravonAI(
     body: { workspaceId, question, context, mode },
   });
 
-  if (error) throw error;
+  if (error) {
+    let detail = error.message || "MAEKRAVON AI request failed.";
+    const context = (error as { context?: Response }).context;
+
+    if (context instanceof Response) {
+      try {
+        const payload = await context.clone().json() as { error?: unknown; message?: unknown };
+        if (payload?.error) detail = String(payload.error);
+        else if (payload?.message) detail = String(payload.message);
+      } catch {
+        try {
+          const bodyText = await context.clone().text();
+          if (bodyText.trim()) detail = bodyText.trim();
+        } catch {
+          // Keep the original Supabase error message.
+        }
+      }
+    }
+
+    throw new Error(detail);
+  }
   if (data?.error) throw new Error(String(data.error));
   if (!data?.answer) throw new Error("MAEKRAVON AI returned an empty response.");
   return String(data.answer);
