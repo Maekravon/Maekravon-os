@@ -1,0 +1,42 @@
+name: MAEKRAVON Buyer Readiness CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Type-check and build
+        run: npm run build
+
+      - name: Check build artifact
+        run: test -s dist/index.html
+
+      - name: Flag missing MK3 source for acquisition diligence
+        shell: bash
+        run: |
+          if [ ! -f supabase/functions/mk3-executive-ai/index.ts ] && [ ! -f functions/mk3-executive-ai/index.ts ]; then
+            echo "::warning::Deployed MK3 backend sources are not present in this GitHub repository. Reconcile the complete local release before acquisition review."
+          fi
+          if [ ! -f supabase/functions/mk3-billing/index.ts ] && [ ! -f functions/mk3-billing/index.ts ]; then
+            echo "::warning::Deployed billing source is absent. Do not claim this repository can reproduce production."
+          fi

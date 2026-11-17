@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { Session } from "@supabase/supabase-js";
 import App from "./App";
-import { supabase, hasSupabaseConfig } from "./lib";
+import { supabase, hasSupabaseConfig, supabaseConfigError } from "./lib";
 
 export default function AuthGate() {
   const [mode, setMode] = useState<"login" | "signup">("login");
@@ -227,7 +227,7 @@ const [workspaceId, setWorkspaceId] = useState<string | null>(null);
       <main style={pageStyle}>
         <div style={cardStyle}>
           <h1>MAEKRAVON OS</h1>
-          <p>Supabase configuration is missing. Check your .env.local file.</p>
+          <p>{supabaseConfigError || "Supabase configuration is missing. Check your environment variables."}</p>
         </div>
       </main>
     );
